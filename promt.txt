@@ -1,0 +1,404 @@
+buat gini coba pada backend satupintu ini kan ini menangkap leads masuk berdasrkan social media leads yang dari berdasarkan keywords router.get("/social/media", authenticateToken, async (req, res) => {
+  try {
+    const { startDate, endDate, sessionId } = req.query;
+    const userId = req.user.id;
+    const roleType = req.user.role_type?.toLowerCase().trim();
+
+    // 1. Ambil list device yang diizinkan (Security: Role-Based Access)
+    let allowedSessions = [];
+    if (roleType === "system" || roleType === "manager") {
+      allowedSessions = await query(
+        "SELECT id FROM wa_sessions"
+      );
+    } else {
+      allowedSessions = await query(
+        `SELECT s.id FROM wa_sessions s 
+         INNER JOIN wa_user_sessions us ON s.id = us.session_id 
+         WHERE us.user_id = ?`,
+        [userId]
+      );
+    }
+
+    const allowedIds = allowedSessions.map((s) => s.id);
+    if (allowedIds.length === 0) {
+      return res.json({ success: true, data: [], platforms: [] });
+    }
+
+    // 2. Filter Device Security (Hanya proses ID yang memang diizinkan)
+    let finalSessionIds = 
+      sessionId && sessionId !== "all" && allowedIds.includes(sessionId)
+        ? [sessionId]
+        : allowedIds;
+
+    // 3. Ambil Keywords hanya untuk Session yang diizinkan
+    const keywords = await query(
+      "SELECT platform, keyword_text, session_id FROM lead_keywords WHERE session_id IN (?)",
+      [finalSessionIds]
+    );
+
+    if (keywords.length === 0 && finalSessionIds.length > 0) {
+       // Tetap lanjut untuk hitung closing, tapi platforms akan kosong
+    }
+
+    // 4. Siapkan filter tanggal
+    let paramsMessages = [finalSessionIds];
+    let paramsClosing = [finalSessionIds];
+    let dateFilterMsg = "";
+    let dateFilterClosing = "";
+
+    if (startDate && endDate) {
+      dateFilterMsg = "AND m.timestamp BETWEEN ? AND ? ";
+      paramsMessages.push(startDate, endDate);
+
+      dateFilterClosing = "AND cl.assigned_at BETWEEN ? AND ? ";
+      paramsClosing.push(startDate, endDate);
+    }
+
+    // 5. Query Utama (Messages & Labels)
+    const sqlMessages = `
+      SELECT m.session_id, m.chat_jid, LOWER(m.content) as content
+      FROM wa_messages m
+      WHERE m.session_id IN (?) 
+        AND m.is_from_me = 0 
+        AND m.chat_jid NOT LIKE '%@g.us'
+        ${dateFilterMsg}
+    `;
+
+    const sqlClosing = `
+      SELECT cl.session_id, COUNT(DISTINCT cl.chat_jid) as closing_count
+      FROM wa_chat_labels cl
+      JOIN wa_labels l ON cl.wa_label_id = l.wa_label_id
+      WHERE cl.session_id IN (?)
+        AND LOWER(l.name) LIKE '%closing%'
+        ${dateFilterClosing}
+      GROUP BY cl.session_id
+    `;
+
+    const organikFilter = await buildOrganikFilter();
+    const organikPlaceholder = finalSessionIds.map(() => "?").join(",");
+    
+    let organikParams = finalSessionIds;
+    let organikDateFilter = "";
+    if (dateFilterMsg) {
+      organikDateFilter = dateFilterMsg.replace('m.', '');
+      organikParams = [...finalSessionIds, startDate, endDate];
+    }
+    
+    const [messages, closingData, organikData] = await Promise.all([
+      query(sqlMessages, paramsMessages),
+      query(sqlClosing, paramsClosing),
+      query(
+        `SELECT session_id, COUNT(*) as organik_count 
+         FROM wa_messages 
+         WHERE session_id IN (${organikPlaceholder}) 
+         AND is_from_me = 1 AND chat_jid NOT LIKE '%@g.us' AND chat_jid NOT LIKE '%@newsletter'
+         ${organikFilter}
+         ${organikDateFilter}
+         GROUP BY session_id`,
+        organikParams
+      )
+    ]);
+
+    // 6. Mapping & Kalkulasi (Sama dengan logic sebelumnya)
+    const closingMap = {};
+    closingData.forEach(c => {
+      closingMap[c.session_id] = parseInt(c.closing_count);
+    });
+
+    const organikMap = {};
+    organikData.forEach(o => {
+      organikMap[o.session_id] = parseInt(o.organik_count);
+    });
+
+    const stats = {};
+    const uniqueSenders = {};
+
+    messages.forEach((msg) => {
+      const sId = msg.session_id;
+      const sender = msg.chat_jid;
+
+      if (!stats[sId]) {
+        stats[sId] = { 
+          session_id: sId, 
+          totalPesanMasuk: 0,
+          totalLeads: 0,
+          totalClosing: closingMap[sId] || 0,
+          totalOrganik: organikMap[sId] || 0
+        };
+        uniqueSenders[sId] = { all_leads: new Set() };
+        
+        keywords.filter(k => k.session_id === sId).forEach((k) => {
+          const pKey = `leads_${k.platform.toLowerCase()}`;
+          stats[sId][pKey] = 0;
+          uniqueSenders[sId][pKey] = new Set();
+        });
+      }
+
+      stats[sId].totalPesanMasuk++;
+
+      const relevantKeywords = keywords.filter((k) => k.session_id === sId);
+      relevantKeywords.forEach((k) => {
+        const platformKey = `leads_${k.platform.toLowerCase()}`;
+        const searchKeyword = k.keyword_text.toLowerCase().trim();
+
+        if (searchKeyword && msg.content && msg.content.includes(searchKeyword)) {
+          if (!uniqueSenders[sId][platformKey].has(sender)) {
+            uniqueSenders[sId][platformKey].add(sender);
+            stats[sId][platformKey]++;
+          }
+          if (!uniqueSenders[sId].all_leads.has(sender)) {
+            uniqueSenders[sId].all_leads.add(sender);
+            stats[sId].totalLeads++;
+          }
+        }
+      });
+    });
+
+    // Pastikan session yang diizinkan tetap muncul di data meski stats-nya nol
+    finalSessionIds.forEach(id => {
+        if (!stats[id]) {
+            stats[id] = {
+                session_id: id,
+                totalPesanMasuk: 0,
+                totalLeads: 0,
+                totalClosing: closingMap[id] || 0,
+                totalOrganik: organikMap[id] || 0
+            };
+        } else {
+            stats[id].totalOrganik = organikMap[id] || 0;
+        }
+    });
+
+    res.json({
+      success: true,
+      data: Object.values(stats),
+      platforms: [...new Set(keywords.map((k) => k.platform.toLowerCase()))],
+    });
+
+  } catch (error) {
+    console.error("Error at /social/media:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+}); nah berdasarkan keyword ini dai kode di atas itu menangkap pesan masuk berdasrkan keyword ini // Simpan atau Update Keyword
+router.post("/keywords/save", authenticateToken, async (req, res) => {
+  const { platform, keyword_text, session_id } = req.body; // Ambil session_id dari request
+
+  if (!platform || !keyword_text || !session_id) {
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "Platform, Keyword, dan Perangkat harus diisi",
+      });
+  }
+
+  try {
+    const sql = `
+      INSERT INTO lead_keywords (platform, session_id, keyword_text) 
+      VALUES (?, ?, ?) 
+      ON DUPLICATE KEY UPDATE 
+        keyword_text = VALUES(keyword_text),
+        session_id = VALUES(session_id)
+    `;
+
+    await query(sql, [platform.toLowerCase(), session_id, keyword_text]);
+
+    res.json({
+      success: true,
+      message: `Keyword berhasil disimpan untuk perangkat tersebut!`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Ambil semua keyword untuk ditampilkan di tabel
+router.get("/keywords", authenticateToken, async (req, res) => {
+  try {
+    const data = await query(`
+      SELECT k.*, s.name as session_name 
+      FROM lead_keywords k
+      LEFT JOIN wa_sessions s ON k.session_id = s.id
+      ORDER BY k.platform ASC
+    `);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}); nah dari api itu bisa menangkap berdasrkan keyword tiktok live nah masuk ke dalam sistem ini nnti ngebaca nya  nah masuk ke sini jadi hasil live tiktok hari itu tuu ngebaca leads hari ini nya berapa dari hasil live tiktok itu yang ngebaca pesan masuk berdasrkan keyword tiktok live "use client";
+
+import { useState } from "react";
+import { format, parseISO } from "date-fns";
+import { id } from "date-fns/locale";
+import { Pencil, Trash2, Eye, ImageIcon, ChevronUp, ChevronDown } from "lucide-react";
+import type { LiveReport } from "@/types";
+
+interface ReportTableProps {
+  reports: LiveReport[];
+  onEdit?: (report: LiveReport) => void;
+  onDelete?: (id: number) => void;
+  onView?: (report: LiveReport) => void;
+  loading?: boolean;
+}
+
+type SortKey = keyof LiveReport;
+
+export default function ReportTable({
+  reports,
+  onEdit,
+  onDelete,
+  onView,
+  loading,
+}: ReportTableProps) {
+  const [sortKey, setSortKey] = useState<SortKey>("tanggal");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("desc"); }
+  };
+
+  const sorted = [...reports].sort((a, b) => {
+    const av = a[sortKey] ?? "";
+    const bv = b[sortKey] ?? "";
+    const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  const SortIcon = ({ k }: { k: SortKey }) =>
+    sortKey === k ? (
+      sortDir === "asc" ? <ChevronUp size={13} className="text-rose-500" /> : <ChevronDown size={13} className="text-rose-500" />
+    ) : (
+      <ChevronDown size={13} className="text-gray-300" />
+    );
+
+  const Th = ({ label, k }: { label: string; k: SortKey }) => (
+    <th
+      className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-800 select-none whitespace-nowrap"
+      onClick={() => toggleSort(k)}
+    >
+      <span className="flex items-center gap-1">
+        {label}
+        <SortIcon k={k} />
+      </span>
+    </th>
+  );
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+        <div className="animate-pulse">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="flex gap-4 px-6 py-4 border-b border-gray-50">
+              {[...Array(8)].map((_, j) => (
+                <div key={j} className="h-4 bg-gray-100 rounded flex-1" />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (reports.length === 0) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 p-16 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mx-auto mb-4">
+          <ImageIcon size={28} className="text-gray-300" />
+        </div>
+        <p className="font-semibold text-gray-800">Belum ada laporan</p>
+        <p className="text-sm text-gray-400 mt-1">Upload screenshot TikTok LIVE untuk mulai mencatat</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-x-auto shadow-sm">
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 border-b border-gray-100">
+          <tr>
+            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">#</th>
+            <Th label="Tanggal" k="tanggal" />
+            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Diunggah Oleh</th>
+            <Th label="Tayangan" k="tayangan" />
+            <Th label="Berlian" k="berlian" />
+            <Th label="Durasi LIVE" k="durasi_live" />
+            <Th label="Pemberi Hadiah" k="pemberi_hadiah" />
+            <Th label="Pengikut Baru" k="pengikut_baru" />
+            <Th label="Komentar" k="komentar" />
+            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Catatan</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Aksi</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-50">
+          {sorted.map((r, idx) => (
+            <tr key={r.id} className="hover:bg-gray-50/60 transition-colors">
+              <td className="px-4 py-3.5 text-gray-400 font-medium text-xs">{idx + 1}</td>
+              <td className="px-4 py-3.5 font-semibold text-gray-800 whitespace-nowrap">
+                {(() => {
+                  try {
+                    return format(parseISO(r.tanggal), "dd MMM yyyy", { locale: id });
+                  } catch {
+                    return r.tanggal;
+                  }
+                })()}
+              </td>
+              <td className="px-4 py-3.5 text-gray-600 text-xs whitespace-nowrap">
+                {r.uploader_name || <span className="text-gray-300">—</span>}
+              </td>
+              <td className="px-4 py-3.5">
+                <span className="badge bg-blue-50 text-blue-700">{r.tayangan}</span>
+              </td>
+              <td className="px-4 py-3.5">
+                <span className="badge bg-amber-50 text-amber-700">💎 {r.berlian}</span>
+              </td>
+              <td className="px-4 py-3.5 text-gray-700 whitespace-nowrap">{r.durasi_live}</td>
+              <td className="px-4 py-3.5">
+                <span className="badge bg-violet-50 text-violet-700">🎁 {r.pemberi_hadiah}</span>
+              </td>
+              <td className="px-4 py-3.5">
+                <span className="badge bg-emerald-50 text-emerald-700">+{r.pengikut_baru}</span>
+              </td>
+              <td className="px-4 py-3.5">
+                <span className="badge bg-rose-50 text-rose-700">💬 {r.komentar}</span>
+              </td>
+              <td className="px-4 py-3.5 text-gray-500 text-xs max-w-[140px] truncate">
+                {r.catatan || <span className="text-gray-300">—</span>}
+              </td>
+              <td className="px-4 py-3.5">
+                <div className="flex items-center gap-1">
+                  {r.screenshot_path && (
+                    <button
+                      onClick={() => onView?.(r)}
+                      className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                      title="Lihat screenshot"
+                    >
+                      <Eye size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onEdit?.(r)}
+                    className="p-1.5 rounded-lg hover:bg-amber-50 text-gray-400 hover:text-amber-600 transition-colors"
+                    title="Edit"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={() => onDelete?.(r.id)}
+                    className="p-1.5 rounded-lg hover:bg-rose-50 text-gray-400 hover:text-rose-600 transition-colors"
+                    title="Hapus"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+
+ini url api yang sudah di hostinnya https://api.satupintu.mendunia.id/ itu url untuk api nya
