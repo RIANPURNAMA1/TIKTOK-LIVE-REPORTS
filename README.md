@@ -185,3 +185,191 @@ tiktok-live-reporter/
 | `ECONNREFUSED` | Pastikan MySQL aktif & credential di `.env` benar |
 | OCR tidak terbaca | Screenshot lebih jelas / zoom in, atau edit manual |
 | Port 3000 sudah dipakai | `npm run dev -- -p 3001` |
+
+---
+
+## 🌐 Deploy ke VPS (Production)
+
+Panduan deploy untuk domain **livetiktok.mendunia.id** dari repository GitHub.
+
+### 1. Prasyarat VPS
+
+- Ubuntu 20.04 / 22.04 / 24.04
+- Node.js 18+
+- MySQL 8+
+- Nginx
+- PM2 (global)
+- Domain livetiktok.mendunia.id pointing ke IP VPS
+
+### 2. Clone Repository
+
+```bash
+cd /var/www
+sudo mkdir -p livetiktok.mendunia.id
+sudo chown $USER:$USER livetiktok.mendunia.id
+git clone https://github.com/RIANPURNAMA1/TIKTOK-LIVE-REPORTS.git livetiktok.mendunia.id
+cd livetiktok.mendunia.id
+```
+
+### 4. Setup Database
+
+```bash
+# Login ke MySQL
+sudo mysql -u root -p
+
+# Buat database
+CREATE DATABASE IF NOT EXISTS tiktok_live_reporter CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+# Buat user database (opsional, atau pakai root)
+CREATE USER 'tiktok_user'@'localhost' IDENTIFIED BY 'passwordkuat123';
+GRANT ALL PRIVILEGES ON tiktok_live_reporter.* TO 'tiktok_user'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+
+# Import schema
+mysql -u tiktok_user -p tiktok_live_reporter < database/schema.sql
+
+# Seed data awal
+npm install
+npm run db:seed
+```
+
+### 5. Konfigurasi Environment
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Isi `.env`:
+
+```env
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=tiktok_user
+DB_PASSWORD=password_kuat
+DB_NAME=tiktok_live_reporter
+
+NEXT_PUBLIC_APP_URL=https://livetiktok.mendunia.id
+JWT_SECRET=isi_dengan_string_acak_yang_aman
+GROQ_API_KEY=groq_api_key_kamu
+```
+
+### 6. Build & Jalankan dengan PM2
+
+```bash
+# Install dependencies
+npm install
+
+# Build untuk production
+npm run build
+
+# Jalankan dengan PM2
+pm2 start npm --name "tiktok-live" -- start
+pm2 save
+pm2 startup
+
+# Set PM2 restart otomatis saat reboot
+sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp /home/$USER
+```
+
+### 7. Konfigurasi Nginx (Reverse Proxy)
+
+```bash
+sudo nano /etc/nginx/sites-available/livetiktok.mendunia.id
+```
+
+Isi file konfigurasi:
+
+```nginx
+server {
+    listen 80;
+    server_name livetiktok.mendunia.id;
+
+    # Redirect HTTP → HTTPS (pakai Certbot nanti)
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name livetiktok.mendunia.id;
+
+    # SSL — isi setelah Certbot
+    ssl_certificate /etc/letsencrypt/live/livetiktok.mendunia.id/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/livetiktok.mendunia.id/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    # Upload size (max 10MB untuk screenshot)
+    client_max_body_size 10M;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # Cache file statis
+    location /_next/static {
+        proxy_pass http://127.0.0.1:3000;
+        expires 365d;
+        access_log off;
+    }
+
+    location /uploads {
+        alias /var/www/livetiktok.mendunia.id/public/uploads;
+        expires 30d;
+        access_log off;
+    }
+}
+```
+
+Aktifkan site:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/livetiktok.mendunia.id /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 8. SSL dengan Certbot (HTTPS)
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d livetiktok.mendunia.id
+
+# Auto-renewal (biasanya sudah otomatis)
+sudo certbot renew --dry-run
+```
+
+### 9. Verifikasi
+
+- Buka https://livetiktok.mendunia.id
+- Login dengan **admin** / **password**
+- Pastikan upload screenshot & OCR berfungsi
+
+### 10. Update Aplikasi
+
+```bash
+cd /var/www/livetiktok.mendunia.id
+git pull origin main
+npm install
+npm run build
+pm2 restart tiktok-live
+```
+
+### Perintah PM2 Penting
+
+| Perintah | Deskripsi |
+|----------|-----------|
+| `pm2 status` | Lihat status semua process |
+| `pm2 logs tiktok-live` | Lihat log aplikasi |
+| `pm2 restart tiktok-live` | Restart aplikasi |
+| `pm2 stop tiktok-live` | Stop aplikasi |
+| `pm2 monit` | Monitor CPU & memory |

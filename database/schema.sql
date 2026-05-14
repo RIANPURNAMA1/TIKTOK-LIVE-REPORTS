@@ -1,11 +1,11 @@
 -- TikTok Live Reporter Database Schema
 -- Run this file to set up the database
 
-CREATE DATABASE IF NOT EXISTS reports_live
+CREATE DATABASE IF NOT EXISTS tiktok_live_reporter
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE reports_live;
+USE tiktok_live_reporter;
 
 -- Users table for authentication
 CREATE TABLE IF NOT EXISTS users (
