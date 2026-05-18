@@ -96,8 +96,8 @@ export default function DashboardPage() {
     <AuthGuard><div className="flex min-h-screen bg-[#F0F2F5]"> {/* Warna background FB asli */}
       <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
       <Header onMenuToggle={() => setMobileOpen((p) => !p)} />
-      <main className={`flex-1 transition-all duration-300 ${collapsed ? "lg:pl-16" : "lg:pl-64"}`}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 pt-20 lg:pt-[72px]">
+      <main className={`flex-1 transition-all duration-300 ${collapsed ? "lg:pl-16" : "lg:pl-[280px]"}`}>
+        <div className=" mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-20 lg:pt-[72px]">
           
           {/* Header Section */}
           <div className="bg-white border border-gray-200 rounded-sm p-5 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -134,7 +134,7 @@ export default function DashboardPage() {
           )}
 
           {/* Stats Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
             {/* Stat Card Khusus dengan desain FB Pro */}
             <div className="bg-white border border-gray-200 rounded-sm p-4">
               <div className="flex justify-between items-start mb-2">
@@ -165,7 +165,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Charts Row */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <div className="bg-white border border-gray-200 rounded-sm p-5">
               <div className="flex items-center justify-between mb-6">
                 <div>

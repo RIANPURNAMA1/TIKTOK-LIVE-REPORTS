@@ -104,7 +104,7 @@ export default function ReportsPage() {
       <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
       <Header onMenuToggle={() => setMobileOpen((p) => !p)} />
       <main className={`flex-1 transition-all duration-300 ${collapsed ? "lg:pl-16" : "lg:pl-64"}`}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 pt-[72px] lg:pt-[72px]">
+        <div className=" mx-auto sm:px-6 py-6 pt-[72px] lg:pt-[72px]">
           
           {/* Header Section */}
           <div className="bg-white border border-gray-200 rounded-sm p-5 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -200,45 +200,15 @@ export default function ReportsPage() {
           )}
 
           {/* Table Container */}
-          <div className="bg-white border border-gray-200 rounded-sm overflow-hidden shadow-sm">
-            <div className="p-1">
-              <ReportTable
-                reports={filtered}
-                onEdit={(r) => { setEditReport(r); setEditOpen(true); }}
-                onDelete={handleDelete}
-                onView={handleView}
-                loading={loading}
-              />
-            </div>
-            
-            {/* Table Footer / Pagination Style */}
-            <div className="px-5 py-4 border-t border-gray-100 bg-[#f5f6f7] flex items-center justify-between">
-              <p className="text-[12px] font-medium text-[#65676b]">
-                Menampilkan <span className="text-[#1c1e21]">{filtered.length}</span> laporan
-              </p>
-              <div className="flex gap-1">
-                 <button disabled className="px-3 py-1 text-xs font-semibold text-gray-400 border border-gray-200 rounded-sm bg-white cursor-not-allowed">Sebelumnya</button>
-                 <button disabled className="px-3 py-1 text-xs font-semibold text-gray-400 border border-gray-200 rounded-sm bg-white cursor-not-allowed">Selanjutnya</button>
-              </div>
-            </div>
+          <div className="rounded-sm overflow-hidden">
+            <ReportTable
+              reports={filtered}
+              onEdit={(r) => { setEditReport(r); setEditOpen(true); }}
+              onDelete={handleDelete}
+              onView={handleView}
+              loading={loading}
+            />
           </div>
-
-          {/* Empty State */}
-          {!loading && filtered.length === 0 && (
-            <div className="bg-white border border-gray-200 rounded-sm p-20 flex flex-col items-center justify-center text-center">
-              <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4 text-gray-200">
-                <Search size={40} />
-              </div>
-              <h3 className="text-lg font-bold text-[#1c1e21]">Laporan tidak ditemukan</h3>
-              <p className="text-sm text-[#65676b] mt-1">Coba ubah kata kunci pencarian atau bersihkan filter.</p>
-              <button 
-                onClick={() => setSearch("")}
-                className="mt-4 text-sm font-semibold text-[#0866FF] hover:underline"
-              >
-                Tampilkan semua laporan
-              </button>
-            </div>
-          )}
         </div>
       </main>
 

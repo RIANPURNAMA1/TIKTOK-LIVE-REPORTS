@@ -26,7 +26,7 @@ export default function Header({ onMenuToggle }: HeaderProps) {
           <div className="w-8 h-8 rounded-md bg-[#0866FF] flex items-center justify-center">
             <TrendingUp size={18} className="text-white" />
           </div>
-          <span className="font-bold text-[#1c1e21] text-lg tracking-tight">TikTok Reports <span className="text-[#0866FF] italic">Mendunia</span></span>
+          <span className="font-bold text-[#1c1e21] text-sm sm:text-lg tracking-tight">TikTok <span className="max-[400px]:hidden">Reports</span> <span className="text-[#0866FF] italic max-[400px]:hidden">Mendunia</span></span>
         </div>
         
       </div>
